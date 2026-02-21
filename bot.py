@@ -8,6 +8,7 @@ import uuid
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, CallbackQuery
 from pyrogram import enums
+from aiohttp import web
 
 from secret import (
     BOT_TOKEN, API_ID, API_HASH, STRING_SESSION,
@@ -72,17 +73,17 @@ async def start_handler(client: Client, message: Message):
                 f"Name: <a href='tg://user?id={user_id}'>{full_name}</a>\n"
                 f"ID: <code>{user_id}</code>\n"
                 f"Username: @{username or 'N/A'}",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
         except Exception:
             pass
 
-    await message.reply(START_TEXT, reply_markup=start_keyboard(), parse_mode="html")
+    await message.reply(START_TEXT, reply_markup=start_keyboard(), parse_mode=enums.ParseMode.HTML)
 
 
 @app.on_message(filters.private & filters.command("help"))
 async def help_handler(client: Client, message: Message):
-    await message.reply(HELP_TEXT, reply_markup=help_keyboard(), parse_mode="html")
+    await message.reply(HELP_TEXT, reply_markup=help_keyboard(), parse_mode=enums.ParseMode.HTML)
 
 
 @app.on_message(filters.private & filters.command("status"))
@@ -96,7 +97,7 @@ async def status_handler(client: Client, message: Message):
         f"📥 <b>Downloads:</b> {stats.get('total_downloads', 0):,}\n"
         f"🤖 <b>Version:</b> 1.0.0\n"
         f"{FOOTER}",
-        parse_mode="html"
+        parse_mode=enums.ParseMode.HTML
     )
 
 
@@ -107,7 +108,7 @@ async def history_handler(client: Client, message: Message):
     if not downloads:
         return await message.reply(
             "<b>📭 No download history yet.</b>\n\nSend a supported URL to get started!",
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
     lines = [f"{HEADER} — <b>Your Last Downloads</b>\n"]
     for i, d in enumerate(downloads, 1):
@@ -117,7 +118,7 @@ async def history_handler(client: Client, message: Message):
             f"   <code>{d['url'][:50]}...</code>"
         )
     lines.append(FOOTER)
-    await message.reply("\n".join(lines), parse_mode="html")
+    await message.reply("\n".join(lines), parse_mode=enums.ParseMode.HTML)
 
 
 @app.on_message(filters.private & filters.command("mysettings"))
@@ -131,12 +132,12 @@ async def mysettings_handler(client: Client, message: Message):
         f"🔔 <b>Notifications:</b> {'On' if settings.get('notifications', True) else 'Off'}\n"
         f"{FOOTER}",
         reply_markup=settings_keyboard(),
-        parse_mode="html"
+        parse_mode=enums.ParseMode.HTML
     )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MAIN DOWNLOAD PIPELINE — triggered when user sends a URL
+# MAIN DOWNLOAD PIPELINE
 # ═══════════════════════════════════════════════════════════════════════════════
 @app.on_message(filters.private & filters.text & ~filters.command([
     "start", "help", "login", "logout", "cancel", "cancellogin",
@@ -147,29 +148,26 @@ async def url_handler(client: Client, message: Message):
     user_id = message.from_user.id
     url     = message.text.strip()
 
-    # ── Auth pipeline ─────────────────────────────────────────────────────
     if not await check_access(message):
         return
     if not await enforce_fsub(client, message):
         return
 
-    # ── URL validation ────────────────────────────────────────────────────
     if not is_supported_url(url):
         sites = "\n".join(f"  • {s}" for s in list_supported_sites())
         return await message.reply(
             f"<b>❌ Unsupported URL.</b>\n\n"
             f"<b>Supported sites:</b>\n{sites}\n\n"
             f"Please send a valid episode link.",
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
 
-    # ── Concurrency check ─────────────────────────────────────────────────
     if not can_start_download(user_id):
         from secret import MAX_CONCURRENT_DOWNLOADS
         return await message.reply(
             f"<b>⏳ You already have {MAX_CONCURRENT_DOWNLOADS} active download(s).</b>\n"
             f"Please wait for them to finish.",
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
 
     site_key   = detect_site(url)
@@ -177,19 +175,18 @@ async def url_handler(client: Client, message: Message):
     fetcher    = get_fetcher(url)
 
     if not fetcher:
-        return await message.reply("<b>❌ Could not initialize downloader.</b>", parse_mode="html")
+        return await message.reply("<b>❌ Could not initialize downloader.</b>", parse_mode=enums.ParseMode.HTML)
 
     status_msg = await message.reply(
         f"<b>🔍 Resolving stream URL...</b>\n\n"
         f"🌐 <b>Site:</b> {fetcher.get_site_name()}\n"
         f"⏳ Please wait...",
-        parse_mode="html"
+        parse_mode=enums.ParseMode.HTML
     )
 
     register_download(user_id)
 
     try:
-        # ── Step 1: Resolve URL ───────────────────────────────────────────
         resolved_url = await fetcher.resolve_url(url)
 
         if not resolved_url or resolved_url == url and "m3u8" not in url:
@@ -197,10 +194,9 @@ async def url_handler(client: Client, message: Message):
             return await status_msg.edit_text(
                 "<b>❌ Could not resolve video stream.</b>\n\n"
                 "The site may be temporarily unavailable.",
-                parse_mode="html"
+                parse_mode=enums.ParseMode.HTML
             )
 
-        # ── Step 2: Server picker (HentaiMama has multiple CDN servers) ───
         if isinstance(fetcher, HentaimimaFetcher):
             servers = fetcher.get_servers()
             if len(servers) > 1:
@@ -216,19 +212,17 @@ async def url_handler(client: Client, message: Message):
                     f"<b>Site:</b> {fetcher.get_site_name()}\n"
                     f"Choose a server to continue:",
                     reply_markup=server_keyboard(servers, session_id),
-                    parse_mode="html"
+                    parse_mode=enums.ParseMode.HTML
                 )
-                return   # wait for server callback
+                return
 
-        # ── Step 3: Quality picker ────────────────────────────────────────
         await status_msg.edit_text(
             f"<b>🎞 Fetching quality options...</b>\n\n"
             f"🌐 <b>Site:</b> {fetcher.get_site_name()}",
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
 
         qualities = await fetcher.get_qualities(resolved_url)
-        user_settings = await db.get_settings(user_id)
 
         DOWNLOAD_SESSIONS[session_id] = {
             "fetcher":      fetcher,
@@ -240,7 +234,6 @@ async def url_handler(client: Client, message: Message):
         }
 
         if not qualities:
-            # Skip quality picker, use default
             await _start_download(client, session_id, "best")
             return
 
@@ -249,7 +242,7 @@ async def url_handler(client: Client, message: Message):
             f"🌐 <b>Site:</b> {fetcher.get_site_name()}\n"
             f"Choose your preferred quality:",
             reply_markup=quality_keyboard(qualities, session_id),
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
 
     except Exception as e:
@@ -257,12 +250,12 @@ async def url_handler(client: Client, message: Message):
         log.error(f"URL handler error for {user_id}: {e}", exc_info=True)
         await status_msg.edit_text(
             f"<b>❌ Error:</b> {str(e)[:200]}\n\nPlease try again.",
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CALLBACK: Server picker
+# CALLBACKS
 # ═══════════════════════════════════════════════════════════════════════════════
 @app.on_callback_query(lambda _, q: q.data.startswith("server:"))
 async def server_callback(client: Client, query: CallbackQuery):
@@ -275,7 +268,7 @@ async def server_callback(client: Client, query: CallbackQuery):
     if choice == "cancel":
         release_download(query.from_user.id)
         DOWNLOAD_SESSIONS.pop(session_id, None)
-        await query.message.edit_text("<b>❌ Download cancelled.</b>", parse_mode="html")
+        await query.message.edit_text("<b>❌ Download cancelled.</b>", parse_mode=enums.ParseMode.HTML)
         return
 
     await query.answer()
@@ -285,12 +278,12 @@ async def server_callback(client: Client, query: CallbackQuery):
 
     fetcher = session["fetcher"]
     session["resolved_url"] = server_url
-    status_msg               = session["status_msg"]
+    status_msg = session["status_msg"]
 
     await status_msg.edit_text(
         f"<b>🎞 Fetching quality options...</b>\n\n"
         f"🖥 <b>Server:</b> {servers[server_index][0]}",
-        parse_mode="html"
+        parse_mode=enums.ParseMode.HTML
     )
 
     qualities = await fetcher.get_qualities(server_url)
@@ -303,13 +296,10 @@ async def server_callback(client: Client, query: CallbackQuery):
         f"🖥 <b>Server:</b> {servers[server_index][0]}\n"
         f"Choose your preferred quality:",
         reply_markup=quality_keyboard(qualities, session_id),
-        parse_mode="html"
+        parse_mode=enums.ParseMode.HTML
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# CALLBACK: Quality picker
-# ═══════════════════════════════════════════════════════════════════════════════
 @app.on_callback_query(lambda _, q: q.data.startswith("quality:"))
 async def quality_callback(client: Client, query: CallbackQuery):
     _, session_id, format_id = query.data.split(":", 2)
@@ -321,16 +311,13 @@ async def quality_callback(client: Client, query: CallbackQuery):
     if format_id == "cancel":
         release_download(query.from_user.id)
         DOWNLOAD_SESSIONS.pop(session_id, None)
-        await query.message.edit_text("<b>❌ Download cancelled.</b>", parse_mode="html")
+        await query.message.edit_text("<b>❌ Download cancelled.</b>", parse_mode=enums.ParseMode.HTML)
         return
 
     await query.answer()
     await _start_download(client, session_id, format_id)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# CALLBACK: Cancel download mid-flight
-# ═══════════════════════════════════════════════════════════════════════════════
 @app.on_callback_query(lambda _, q: q.data.startswith("cancel_dl:"))
 async def cancel_download_callback(client: Client, query: CallbackQuery):
     session_id = query.data.split(":")[1]
@@ -346,25 +333,22 @@ async def cancel_download_callback(client: Client, query: CallbackQuery):
     release_download(query.from_user.id)
     DOWNLOAD_SESSIONS.pop(session_id, None)
     await query.answer("❌ Cancelling...", show_alert=True)
-    await query.message.edit_text("<b>❌ Download cancelled.</b>", parse_mode="html")
+    await query.message.edit_text("<b>❌ Download cancelled.</b>", parse_mode=enums.ParseMode.HTML)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# CALLBACK: Help / Start / Settings navigation
-# ═══════════════════════════════════════════════════════════════════════════════
 @app.on_callback_query(lambda _, q: q.data in ("start", "help", "settings", "myaccount", "stats"))
 async def nav_callback(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     data    = query.data
 
     if data == "start":
-        await query.message.edit_text(START_TEXT, reply_markup=start_keyboard(), parse_mode="html")
+        await query.message.edit_text(START_TEXT, reply_markup=start_keyboard(), parse_mode=enums.ParseMode.HTML)
     elif data == "help":
-        await query.message.edit_text(HELP_TEXT, reply_markup=help_keyboard(), parse_mode="html")
+        await query.message.edit_text(HELP_TEXT, reply_markup=help_keyboard(), parse_mode=enums.ParseMode.HTML)
     elif data == "settings":
         await query.message.edit_text(
             f"{HEADER} — <b>Settings</b>\n\nCustomize your experience:",
-            reply_markup=settings_keyboard(), parse_mode="html"
+            reply_markup=settings_keyboard(), parse_mode=enums.ParseMode.HTML
         )
     elif data == "myaccount":
         user     = await db.get_user(user_id)
@@ -379,7 +363,7 @@ async def nav_callback(client: Client, query: CallbackQuery):
             f"⭐ <b>Premium:</b> {premium}\n"
             f"🔐 <b>Session:</b> {logged}\n"
             f"{FOOTER}",
-            reply_markup=start_keyboard(), parse_mode="html"
+            reply_markup=start_keyboard(), parse_mode=enums.ParseMode.HTML
         )
     elif data == "stats":
         stats = await db.get_stats()
@@ -388,21 +372,18 @@ async def nav_callback(client: Client, query: CallbackQuery):
             f"👥 <b>Users:</b> {stats.get('total_users', 0):,}\n"
             f"📥 <b>Downloads:</b> {stats.get('total_downloads', 0):,}\n"
             f"{FOOTER}",
-            reply_markup=start_keyboard(), parse_mode="html"
+            reply_markup=start_keyboard(), parse_mode=enums.ParseMode.HTML
         )
     await query.answer()
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# CALLBACK: FSub check again
-# ═══════════════════════════════════════════════════════════════════════════════
 @app.on_callback_query(lambda _, q: q.data == "fsub:check")
 async def fsub_check_callback(client: Client, query: CallbackQuery):
     await check_fsub_callback(client, query)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CORE: Run the actual download + upload
+# CORE DOWNLOADER
 # ═══════════════════════════════════════════════════════════════════════════════
 async def _start_download(client: Client, session_id: str, format_id: str):
     session    = DOWNLOAD_SESSIONS.get(session_id)
@@ -414,23 +395,20 @@ async def _start_download(client: Client, session_id: str, format_id: str):
     user_id      = session["user_id"]
     status_msg   = session["status_msg"]
     url          = session["url"]
-    site_key     = session.get("site_key", fetcher.get_site_name())
 
     quality_label = format_id if format_id != "best" else "Best"
     title         = fetcher.SITE_NAME + " Video"
 
-    # Show cancel button during download
     await status_msg.edit_text(
         f"<b>⬇️ Starting download...</b>\n\n"
         f"🌐 <b>Site:</b> {fetcher.get_site_name()}\n"
         f"🎞 <b>Quality:</b> {quality_label}",
         reply_markup=cancel_download_keyboard(session_id),
-        parse_mode="html"
+        parse_mode=enums.ParseMode.HTML
     )
 
     file_path = None
     try:
-        # ── DOWNLOAD ──────────────────────────────────────────────────────
         last_update = [0.0]
         import time
 
@@ -453,7 +431,7 @@ async def _start_download(client: Client, session_id: str, format_id: str):
                 await status_msg.edit_text(
                     text,
                     reply_markup=cancel_download_keyboard(session_id),
-                    parse_mode="html"
+                    parse_mode=enums.ParseMode.HTML
                 )
             except Exception:
                 pass
@@ -473,10 +451,9 @@ async def _start_download(client: Client, session_id: str, format_id: str):
             f"<b>📤 Uploading...</b>\n\n"
             f"🎬 <b>{title_clean[:40]}</b>\n"
             f"📦 <b>Size:</b> {size_str}",
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
 
-        # ── UPLOAD ────────────────────────────────────────────────────────
         user_settings = await db.get_settings(user_id)
         sent_msgs = await upload_video(
             client          = client,
@@ -489,7 +466,6 @@ async def _start_download(client: Client, session_id: str, format_id: str):
             user_upload_mode= user_settings.get("upload_mode"),
         )
 
-        # Log to channel
         if LOG_CHANNEL_ID and sent_msgs:
             await upload_to_log_channel(
                 client,
@@ -506,7 +482,7 @@ async def _start_download(client: Client, session_id: str, format_id: str):
             f"🎞 <b>Quality:</b> {quality_final}\n"
             f"📦 <b>Size:</b> {size_str}\n"
             f"{FOOTER}",
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
 
     except Exception as e:
@@ -514,17 +490,35 @@ async def _start_download(client: Client, session_id: str, format_id: str):
         await db.log_download(user_id, url, fetcher.SITE_NAME, quality_label, "failed")
         await status_msg.edit_text(
             f"<b>❌ Failed!</b>\n\n{str(e)[:300]}\n\nPlease try again.",
-            parse_mode="html"
+            parse_mode=enums.ParseMode.HTML
         )
     finally:
         release_download(user_id)
         DOWNLOAD_SESSIONS.pop(session_id, None)
-        # Clean up downloaded file
         if file_path and os.path.isfile(file_path):
             try:
                 os.remove(file_path)
             except Exception:
                 pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DUMMY WEB SERVER (FOR RENDER DEPLOYMENTS)
+# ═══════════════════════════════════════════════════════════════════════════════
+async def keep_alive():
+    async def handle_request(request):
+        return web.Response(text="Bot is running smoothly!")
+    
+    server = web.Application()
+    server.router.add_get('/', handle_request)
+    runner = web.AppRunner(server)
+    await runner.setup()
+    
+    # Render binds the port to the PORT environment variable dynamically
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    log.info(f"Dummy web server started on port {port}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -536,7 +530,9 @@ async def main():
     clean_download_dir(DOWNLOAD_PATH)
     await db.setup_indexes()
     
-    # Context manager properly handles the Pyrogram connection state
+    # Start the dummy web server so Render doesn't kill the bot
+    await keep_alive()
+    
     async with app:
         log.info(f"🚀 {BOT_NAME} started successfully!")
         me = await app.get_me()
@@ -547,12 +543,11 @@ async def main():
                 await app.send_message(
                     OWNER_ID,
                     f"<b>🚀 {BOT_NAME} is online!</b>\n\nVersion: 1.0.0",
-                    parse_mode="html"
+                    parse_mode=enums.ParseMode.HTML
                 )
             except Exception:
                 pass
                 
-        # idle() keeps the bot running and listening for updates
         await idle()
 
 if __name__ == "__main__":
