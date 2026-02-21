@@ -5,7 +5,7 @@
 import os
 import asyncio
 import uuid
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import Message, CallbackQuery
 from pyrogram import enums
 
@@ -530,25 +530,31 @@ async def _start_download(client: Client, session_id: str, format_id: str):
 # ═══════════════════════════════════════════════════════════════════════════════
 # STARTUP
 # ═══════════════════════════════════════════════════════════════════════════════
-async def on_startup():
+async def main():
     os.makedirs(DOWNLOAD_PATH, exist_ok=True)
     os.makedirs("logs", exist_ok=True)
     clean_download_dir(DOWNLOAD_PATH)
     await db.setup_indexes()
-    log.info(f"🚀 {BOT_NAME} started successfully!")
-    me = await app.get_me()
-    log.info(f"Bot: @{me.username} | ID: {me.id}")
-    if OWNER_ID:
-        try:
-            await app.send_message(
-                OWNER_ID,
-                f"<b>🚀 {BOT_NAME} is online!</b>\n\nVersion: 1.0.0",
-                parse_mode="html"
-            )
-        except Exception:
-            pass
-
+    
+    # Context manager properly handles the Pyrogram connection state
+    async with app:
+        log.info(f"🚀 {BOT_NAME} started successfully!")
+        me = await app.get_me()
+        log.info(f"Bot: @{me.username} | ID: {me.id}")
+        
+        if OWNER_ID:
+            try:
+                await app.send_message(
+                    OWNER_ID,
+                    f"<b>🚀 {BOT_NAME} is online!</b>\n\nVersion: 1.0.0",
+                    parse_mode="html"
+                )
+            except Exception:
+                pass
+                
+        # idle() keeps the bot running and listening for updates
+        await idle()
 
 if __name__ == "__main__":
     log.info(f"Starting {BOT_NAME}...")
-    app.run(on_startup())
+    app.run(main())
