@@ -1,0 +1,43 @@
+# Developed by: LastPerson07 × RexBots
+# Telegram: @RexBots_Official | @THEUPDATEDGUYS
+# Project: Hanime Fetcher
+
+version: "3.9"
+
+services:
+  bot:
+    build: .
+    container_name: hanime_fetcher_bot
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./downloads:/app/downloads
+      - ./logs:/app/logs
+      - ./secret.py:/app/secret.py   # mount config so you can edit without rebuild
+    networks:
+      - hanime_net
+
+  mongo:
+    image: mongo:7
+    container_name: hanime_fetcher_mongo
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hanime_net
+
+volumes:
+  mongo_data:
+
+networks:
+  hanime_net:
+    driver: bridge
